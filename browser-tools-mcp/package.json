@@ -1,8 +1,12 @@
 {
   "name": "@munawwar-forks/browser-tools-mcp",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "MCP (Model Context Protocol) server for browser tools integration",
   "main": "dist/mcp-server.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Munawwar/browser-tools-mcp"
+  },
   "bin": {
     "browser-tools-mcp": "dist/mcp-server.js"
   },

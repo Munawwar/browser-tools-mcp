@@ -1,8 +1,9 @@
 {
     "name": "BrowserTools MCP Fork by Munawwar",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "description": "MCP tool for AI code editors to capture data from a browser such as console logs, network requests, screenshots and more",
     "manifest_version": 3,
+    "homepage_url": "https://github.com/Munawwar/browser-tools-mcp",
     "devtools_page": "devtools.html",
     "permissions": [
       "activeTab",
