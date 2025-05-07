@@ -4,6 +4,20 @@
 
 This application is a powerful browser monitoring and interaction tool that enables AI-powered applications via Anthropic's Model Context Protocol (MCP) to capture and analyze browser data through a Chrome extension.
 
+## Quick Start
+
+**Step 1**: Download this repo and load the `chrome-extension` directory in developer mode.
+
+**Step 2**: Run MCP server (configure your IDE with this):
+```sh
+npx -y @munawwar-forks/browser-tools-mcp@1.2.2
+```
+
+**Step 3**: Run browser-connector server in a terminal
+```sh
+npx -y @munawwar-forks/browser-tools-server@1.2.2
+```
+
 Read our [docs](https://browsertools.agentdesk.ai/) for the full installation, quickstart and contribution guides.
 
 ## Roadmap
