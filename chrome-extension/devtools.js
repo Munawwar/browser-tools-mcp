@@ -1025,7 +1025,7 @@ async function setupWebSocket() {
                 const elementCount = (selector.match(/[a-z][\w-]*/ig) || []).length - 
                                     (selector.match(/:[a-z][\w-]*/ig) || []).length;
                 
-                return idCount * 100 + classCount * 10 + elementCount;
+                return idCount * 10000 + classCount * 100 + elementCount;
               }
 
               // FNV-1a hash function implementation
