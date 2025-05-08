@@ -90,6 +90,7 @@ Coding agents like Cursor can run these audits against the current page seamless
 | **NextJS Audit**   | Injects a prompt used to perform a NextJS audit.                                                                                         |
 | **Audit Mode**     | Runs all auditing tools in a sequence.                                                                                                   |
 | **Debugger Mode**  | Runs all debugging tools in a sequence.                                                                                                  |
+| **Element Inspection** | Inspect HTML elements and their CSS properties using CSS selectors.                                                                  |
 
 ---
 
@@ -181,6 +182,17 @@ Runs all debugging tools in a particular sequence
 >
 > - "Enter debugger mode."
 
+#### Inspect Elements By Selector (`inspectElementsBySelector`)
+
+Finds HTML elements that match a CSS selector and returns their HTML and CSS styles.
+
+> **Example Queries:**
+>
+> - "Inspect the body element."
+> - "Show me all the button elements."
+> - "What CSS styles are applied to the header?"
+> - "Inspect the element with class 'container' and show its font properties."
+
 ## Architecture
 
 There are three core components all used to capture and analyze browser data:
@@ -243,6 +255,7 @@ Once installed and configured, the system allows any compatible MCP client to:
 - Capture network traffic
 - Take screenshots
 - Analyze selected elements
+- Inspect elements HTML and CSS using CSS selectors
 - Wipe logs stored in our MCP server
 - Run accessibility, performance, SEO, and best practices audits
 
