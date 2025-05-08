@@ -1160,6 +1160,8 @@ async function setupWebSocket() {
                 } else {
                   seenRulesBefore = true;
                 }
+
+                const rect = element.getBoundingClientRect();
                 
                 return {
                   index: index,
@@ -1173,7 +1175,15 @@ async function setupWebSocket() {
                     clientWidth: element.clientWidth,
                     clientHeight: element.clientHeight
                   },
-                  boundingClientRect: element.getBoundingClientRect(),
+                  boundingClientRect: {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    top: rect.top,
+                    left: rect.left,
+                    bottom: rect.bottom,
+                  },
                   styles: {
                     // Only include full rules if it's the first occurrence
                     ...(!seenRulesBefore && { matchedRules }),
