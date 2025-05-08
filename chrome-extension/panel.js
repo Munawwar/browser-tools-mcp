@@ -979,3 +979,168 @@ wipeLogsButton.addEventListener("click", () => {
       }, 2000);
     });
 });
+
+// Add direct CSS command test
+document.getElementById('test-css-direct').addEventListener('click', async function() {
+  const resultsDiv = document.getElementById('css-test-results');
+  resultsDiv.style.display = 'block';
+  resultsDiv.textContent = 'Testing CSS.getMatchedStylesForNode...\n';
+  
+  const tabId = chrome.devtools.inspectedWindow.tabId;
+  
+  // Helper function to send debugger commands with Promise
+  async function sendCommand(method, params = {}) {
+    return new Promise((resolve, reject) => {
+      chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(result);
+        }
+      });
+    });
+  }
+  
+  try {
+    // Get the currently selected element
+    const selectedElement = await new Promise((resolve, reject) => {
+      chrome.devtools.inspectedWindow.eval(
+        `(function() {
+          if (!$0) return { error: "No element selected in Elements panel" };
+          
+          return {
+            tagName: $0.tagName.toLowerCase(),
+            id: $0.id,
+            className: $0.className
+          };
+        })()`,
+        (result, isException) => {
+          if (isException) {
+            reject(new Error(isException.value));
+          } else if (result.error) {
+            reject(new Error(result.error));
+          } else {
+            resolve(result);
+          }
+        }
+      );
+    });
+    
+    // Create selector for the element
+    let selector = '.MuiFormControl-root.MuiTextField-root';
+    
+    resultsDiv.textContent += `Element: ${selector}\n\n`;
+    
+    // Get matched styles using the direct approach
+    try {
+      // Step 1: Get the document root
+      const rootResult = await sendCommand("DOM.getDocument", { depth: 1 });
+      
+      // Step 2: Enable domains (these may fail if already enabled, that's OK)
+      try { await sendCommand("DOM.enable"); } catch(e) {}
+      try { await sendCommand("CSS.enable"); } catch(e) {}
+      
+      // Step 3: Get the node ID using querySelector
+      const nodeResult = await sendCommand("DOM.querySelector", {
+        nodeId: rootResult.root.nodeId,
+        selector: selector
+      });
+      
+      if (!nodeResult || !nodeResult.nodeId) {
+        throw new Error("Could not find node ID for the selected element");
+      }
+      
+      // Step 4: Get matched styles
+      const styles = await sendCommand("CSS.getMatchedStylesForNode", {
+        nodeId: nodeResult.nodeId
+      });
+      
+      // Display the full JSON result
+      resultsDiv.textContent += "Full JSON Response:\n\n";
+      resultsDiv.textContent += JSON.stringify(styles, null, 2);
+      
+      // Add the helper function at the bottom
+      resultsDiv.textContent += "\n\n// Helper function for your codebase:\n";
+      resultsDiv.textContent += getHelperFunctionCode();
+      
+    } catch (error) {
+      if (error.message.includes("CSS agent was not enabled")) {
+        // Try with a different sequence
+        resultsDiv.textContent += "Retrying with different order...\n";
+        
+        // Try enabling CSS first, then DOM
+        try { await sendCommand("CSS.enable"); } catch(e) {}
+        try { await sendCommand("DOM.enable"); } catch(e) {}
+        
+        // Get document root again
+        const rootResult = await sendCommand("DOM.getDocument", { depth: 1 });
+        
+        // Get node ID
+        const nodeResult = await sendCommand("DOM.querySelector", {
+          nodeId: rootResult.root.nodeId,
+          selector: selector
+        });
+        
+        // Try again to get matched styles
+        const styles = await sendCommand("CSS.getMatchedStylesForNode", {
+          nodeId: nodeResult.nodeId
+        });
+        
+        // Display the full JSON result
+        resultsDiv.textContent += "Full JSON Response:\n\n";
+        resultsDiv.textContent += JSON.stringify(styles, null, 2);
+        
+        // Add the helper function at the bottom
+        resultsDiv.textContent += "\n\n// Helper function for your codebase:\n";
+        resultsDiv.textContent += getHelperFunctionCode();
+      } else {
+        resultsDiv.textContent += `Error: ${error.message}\n`;
+      }
+    }
+    
+  } catch (error) {
+    resultsDiv.textContent += `${error.message}\nPlease select an element in the Elements panel first.\n`;
+  }
+  
+  function getHelperFunctionCode() {
+    return `
+async function getMatchedStylesForNode(selector) {
+  const tabId = chrome.devtools.inspectedWindow.tabId;
+  
+  // Helper function to send debugger commands with Promise
+  const sendCommand = async (method, params = {}) => {
+    return new Promise((resolve, reject) => {
+      chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(result);
+        }
+      });
+    });
+  };
+  
+  // Step 1: Get the document root
+  const root = await sendCommand("DOM.getDocument", { depth: 1 });
+  
+  // Step 2: Enable domains (these may fail if already enabled, that's OK)
+  try { await sendCommand("DOM.enable"); } catch(e) {}
+  try { await sendCommand("CSS.enable"); } catch(e) {}
+  
+  // Step 3: Get the node
+  const node = await sendCommand("DOM.querySelector", {
+    nodeId: root.root.nodeId,
+    selector
+  });
+  
+  if (!node || !node.nodeId) {
+    throw new Error("Element not found: " + selector);
+  }
+  
+  // Step 4: Get the matched styles
+  return await sendCommand("CSS.getMatchedStylesForNode", {
+    nodeId: node.nodeId
+  });
+}`;
+  }
+});
