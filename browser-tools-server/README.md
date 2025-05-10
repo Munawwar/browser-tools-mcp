@@ -15,13 +15,13 @@ A powerful browser tools server for capturing and managing browser events, logs,
 ## Installation
 
 ```bash
-npx @agentdeskai/browser-tools-server
+npx @munawwar-forks/browser-tools-server
 ```
 
 Or install globally:
 
 ```bash
-npm install -g @agentdeskai/browser-tools-server
+npm install -g @munawwar-forks/browser-tools-server
 ```
 
 ## Usage
@@ -29,7 +29,7 @@ npm install -g @agentdeskai/browser-tools-server
 1. Start the server:
 
 ```bash
-npx @agentdeskai/browser-tools-server
+npx @munawwar-forks/browser-tools-server
 ```
 
 2. The server will start on port 3025 by default
@@ -48,6 +48,7 @@ npx @agentdeskai/browser-tools-server
 - `/accessibility-audit` - Run accessibility audit on current page
 - `/performance-audit` - Run performance audit on current page
 - `/seo-audit` - Run SEO audit on current page
+- `/inspect-elements-by-selector` - Get HTML and CSS information for elements matching a given CSS selector
 
 ## API Documentation
 
@@ -69,6 +70,7 @@ npx @agentdeskai/browser-tools-server
 - `POST /accessibility-audit` - Run a WCAG-compliant accessibility audit on the current page
 - `POST /performance-audit` - Run a performance audit on the current page
 - `POST /seo-audit` - Run a SEO audit on the current page
+- `POST /inspect-elements-by-selector` - Returns HTML and CSS information for elements matching a given CSS selector
 
 # Audit Functionality
 

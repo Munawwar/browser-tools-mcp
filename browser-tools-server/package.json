@@ -1,6 +1,6 @@
 {
   "name": "@munawwar-forks/browser-tools-server",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "A browser tools server for capturing and managing browser events, logs, and screenshots",
   "type": "module",
   "main": "dist/browser-connector.js",

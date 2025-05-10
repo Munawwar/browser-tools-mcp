@@ -1086,7 +1086,12 @@ async function setupWebSocket() {
             // First check if elements exist and get basic info about them using eval
             const [elementsInfo, elementsInfoException] = await windowEval(function (selector, resultLimit) {
               // DO NOT have any closures in this entire function, because the function is stringified.
-              const elements = document.querySelectorAll(selector);
+              let elements = [];
+              if (selector === "$0") {
+                elements = [$0];
+              } else {
+                elements = document.querySelectorAll(selector);
+              }
               if (elements.length === 0) {
                 return { error: "No elements found matching selector" };
               }

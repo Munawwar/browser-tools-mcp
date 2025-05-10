@@ -326,7 +326,7 @@ server.tool(
   "inspectElementsBySelector",
   "Get HTML elements and their CSS styles matching a CSS selector",
   { 
-    selector: z.string().describe("CSS selector to find elements (e.g., '.classname', '#id', 'div.container > p')"),
+    selector: z.string().describe("CSS selector to find elements (e.g., '.classname', '#id', 'div.container > p'). Use $0 to inspect the current element."),
     resultLimit: z.number().optional().default(1).describe("Maximum number of elements to process (default: 1)"),
     includeComputedStyles: z.array(z.string()).optional().default([]).describe("Array of specific CSS properties to include in the computed styles output (empty array means no computed styles)")
   },
