@@ -10,12 +10,12 @@ This application is a powerful browser monitoring and interaction tool that enab
 
 **Step 2**: Run MCP server (configure your IDE with this):
 ```sh
-npx -y @munawwar-forks/browser-tools-mcp@1.2.2
+npx -y @munawwar-forks/browser-tools-mcp@1.2.3
 ```
 
 **Step 3**: Run browser-connector server in a terminal
 ```sh
-npx -y @munawwar-forks/browser-tools-server@1.2.2
+npx -y @munawwar-forks/browser-tools-server@1.2.3
 ```
 
 Read our [docs](https://browsertools.agentdesk.ai/) for the full installation, quickstart and contribution guides.
