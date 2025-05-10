@@ -520,9 +520,50 @@ async function attachDebugger() {
   });
 }
 
+// Helper function to send debugger commands with Promise
+async function sendCommand(method, params = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.sendCommand(
+      { tabId: currentTabId },
+      method,
+      params,
+      (result) => {
+        if (chrome.runtime.lastError) {
+          const err = new Error(chrome.runtime.lastError.message);
+          err.originalError = chrome.runtime.lastError;
+          reject(err);
+        } else {
+          resolve(result);
+        }
+      }
+    );
+  });
+};
+
+// Listen for styleSheetAdded events
+let styleSheets = [];
+
+// Create a stylesheet event listener
+const styleSheetEventListener = (source, method, params) => {
+  // Only process events for our tab
+  if (source.tabId !== chrome.devtools.inspectedWindow.tabId) {
+    return;
+  }
+
+  if (method === "CSS.styleSheetAdded") {
+    console.log("Chrome Extension: Style sheet added");
+    styleSheets.push(params.header);
+  } else if (method === "CSS.styleSheetRemoved") {
+    console.log("Chrome Extension: Style sheet removed");
+    styleSheets = styleSheets.filter(
+      (sheet) => sheet.styleSheetId !== params.styleSheetId
+    );
+  }
+};
+
 function performAttach() {
   console.log("Performing debugger attachment to tab:", currentTabId);
-  chrome.debugger.attach({ tabId: currentTabId }, "1.3", () => {
+  chrome.debugger.attach({ tabId: currentTabId }, "1.3", async () => {
     if (chrome.runtime.lastError) {
       console.error("Failed to attach debugger:", chrome.runtime.lastError);
       isDebuggerAttached = false;
@@ -532,21 +573,24 @@ function performAttach() {
     isDebuggerAttached = true;
     console.log("Debugger successfully attached");
 
+    // Step 2: Enable domains (these may fail if already enabled, that's OK)
+    try {
+      await sendCommand("DOM.enable");
+    } catch (e) {}
+    try {
+      await sendCommand("CSS.enable");
+    } catch (e) {}
+
     // Add the event listener when attaching
     chrome.debugger.onEvent.addListener(consoleMessageListener);
+    chrome.debugger.onEvent.addListener(styleSheetEventListener);
 
-    chrome.debugger.sendCommand(
-      { tabId: currentTabId },
-      "Runtime.enable",
-      {},
-      () => {
-        if (chrome.runtime.lastError) {
-          console.error("Failed to enable runtime:", chrome.runtime.lastError);
-          return;
-        }
-        console.log("Runtime API successfully enabled");
-      }
-    );
+    try {
+      await sendCommand("Runtime.enable", {});
+      console.log("Runtime API successfully enabled");
+    } catch (e) {
+      console.error("Failed to enable runtime:", e?.originalError);
+    }
   });
 }
 
@@ -685,6 +729,31 @@ window.addEventListener("unload", () => {
     heartbeatInterval = null;
   }
 });
+
+/**
+ * 
+ * @param {Function|string} func 
+ * @param {(string | number)[]} args 
+ */
+async function windowEval(func, args) {
+  const stringifiedArgs = args.map((arg) => {
+    if (typeof arg === "string") {
+      return JSON.stringify(arg);
+    }
+    if (Array.isArray(arg)) {
+      return `JSON.parse(${JSON.stringify(JSON.stringify(arg))})`;
+    }
+    return arg;
+  }).join(", ");
+  const funcString = typeof func === "string" ? func : func.toString();
+  const evalString = `(${funcString})(${stringifiedArgs})`;
+  console.log("Evaluating:", evalString);
+  return new Promise((resolve) => {
+    chrome.devtools.inspectedWindow.eval(evalString, (resultInner, exceptionInner) => {
+      resolve([resultInner, exceptionInner]);
+    });
+  });
+}
 
 // Function to capture and send element data
 function captureAndSendElement() {
@@ -1003,259 +1072,377 @@ async function setupWebSocket() {
             ws.send(JSON.stringify(response));
           });
         } else if (message.type === "inspect-elements-by-selector") {
-          console.log("Chrome Extension: Received request for inspecting elements by selector:", message.selector);
+          console.log(
+            "Chrome Extension: Received request for inspecting elements by selector:",
+            message.selector
+          );
           const resultLimit = message.resultLimit || 1;
           const includeComputedStyles = message.includeComputedStyles || [];
-          
-          // Define the inspection function separately for better readability
-          const inspectionFunction = function(selector, limit, includeComputedStyles) {
-            try {
-              // Find all elements matching the selector
+
+          // Now start the inspection process
+          try {
+            // First check if elements exist and get basic info about them using eval
+            const [elementsInfo, elementsInfoException] = await windowEval(function (selector, resultLimit) {
+              // DO NOT have any closures in this entire function, because the function is stringified.
               const elements = document.querySelectorAll(selector);
-              
               if (elements.length === 0) {
                 return { error: "No elements found matching selector" };
               }
-              
-              // Calculate specificity of a selector (simplified)
-              function calculateSpecificity(selector) {
-                let specificity = 0;
-                const idCount = (selector.match(/#[\w-]+/g) || []).length;
-                const classCount = (selector.match(/\.[\w-]+/g) || []).length;
-                const elementCount = (selector.match(/[a-z][\w-]*/ig) || []).length - 
-                                    (selector.match(/:[a-z][\w-]*/ig) || []).length;
-                
-                return idCount * 10000 + classCount * 100 + elementCount;
-              }
-
-              // FNV-1a hash function implementation
-              function fnv1a(str) {
-                let h = 0x811c9dc5;
-                for (let i = 0; i < str.length; i++) {
-                  h ^= str.charCodeAt(i);
-                  h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
-                }
-                // Convert to base36 string representation for readability and compactness
-                return (h >>> 0).toString(36);
-              }
-
-              function getStartTag(element) {
-                if (!element || !element.outerHTML) {
-                  return "";
-                }
-
-                let outerHTML = element.outerHTML;
-                const tagName = element.tagName.toLowerCase();
-                const closingTag = `</${tagName}>`;
-                
-                if (outerHTML.endsWith(closingTag)) {
-                  outerHTML = outerHTML.slice(0, outerHTML.length - closingTag.length);
-                }
-
-                const startTag = outerHTML.replace(element.innerHTML, "");
-                return startTag;
-              }
-              
-              // Storage for HTML and rule hashes to avoid duplication
-              const htmlStore = {};
-              const ruleStore = {};
-              const seenHtml = new Set();
-              const seenRules = new Set();
-              
-              // Process a single element to get its HTML and CSS details
-              function processElement(element, index) {
-                // Get the HTML and hash it
-                const html = element.outerHTML;
-                const htmlHash = fnv1a(html);
-                
-                // Store the HTML if we haven't seen it before
-                let seenHtmlBefore = false;
-                if (!seenHtml.has(htmlHash)) {
-                  htmlStore[htmlHash] = html;
-                  seenHtml.add(htmlHash);
-                } else {
-                  seenHtmlBefore = true;
-                }
-                
-                // Get computed styles if requested
-                let computedStyles;
-                if (Array.isArray(includeComputedStyles) && includeComputedStyles.length > 0) {
-                  computedStyles = {};
-                  const styles = window.getComputedStyle(element);
-                  for (const prop of includeComputedStyles) {
-                    if (prop in styles) {
-                      computedStyles[prop] = styles.getPropertyValue(prop);
-                    }
-                  }
-                }
-                
-                // Find matching rules
-                const matchedRules = [];
-                
-                for (let i = 0; i < document.styleSheets.length; i++) {
-                  try {
-                    const sheet = document.styleSheets[i];
-                    let rules = [];
-                    
-                    try {
-                      rules = sheet.cssRules || sheet.rules || [];
-                    } catch (e) {
-                      // Skip cross-origin stylesheets
-                      continue;
-                    }
-                    
-                    // Determine stylesheet origin
-                    let originType = 'author';
-                    if (sheet.href && (
-                      sheet.href.includes('user-agent') || 
-                      sheet.href.includes('chrome://') ||
-                      !sheet.ownerNode)) {
-                      originType = 'user-agent';
-                    }
-                    
-                    for (let j = 0; j < rules.length; j++) {
-                      const rule = rules[j];
-                      
-                      try {
-                        if (rule.selectorText && element.matches(rule.selectorText)) {
-                          matchedRules.push({
-                            cssText: rule.cssText,
-                            styleSheet: {
-                              href: sheet.href || 'inline',
-                              index: i,
-                              // Include style tag's attributes. This may be needed for CSS-in-JS solutions'
-                              ...(!sheet.href && { tag: getStartTag(sheet.ownerNode) })
-                            },
-                            specificity: calculateSpecificity(rule.selectorText),
-                          });
-                        }
-                      } catch (e) {
-                        // Skip non-standard rules
-                        continue;
-                      }
-                    }
-                  } catch (e) {
-                    // Skip inaccessible stylesheets
-                    continue;
-                  }
-                }
-                
-                // Sort rules by specificity (higher values first)
-                matchedRules.sort((a, b) => {
-                  if (b.specificity === a.specificity) {
-                    return b.styleSheet.index - a.styleSheet.index;
-                  }
-                  return b.specificity - a.specificity
-                });
-                
-                // Hash the entire matchedRules array
-                const rulesJson = JSON.stringify(matchedRules);
-                const rulesHash = fnv1a(rulesJson);
-                
-                // Store the rules if we haven't seen this exact set before
-                let seenRulesBefore = false;
-                if (!seenRules.has(rulesHash)) {
-                  ruleStore[rulesHash] = matchedRules;
-                  seenRules.add(rulesHash);
-                } else {
-                  seenRulesBefore = true;
-                }
-
-                const rect = element.getBoundingClientRect();
-                
-                return {
-                  index: index,
-                  // Only send full HTML if it's the first occurrence
-                  ...(!seenHtmlBefore && { html }),
-                  htmlHash: htmlHash,
-                  // Include minimal dimensional info that isn't in the HTML
-                  dimensions: {
-                    offsetWidth: element.offsetWidth,
-                    offsetHeight: element.offsetHeight,
-                    clientWidth: element.clientWidth,
-                    clientHeight: element.clientHeight
-                  },
-                  boundingClientRect: {
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height,
-                    top: rect.top,
-                    left: rect.left,
-                    bottom: rect.bottom,
-                  },
-                  styles: {
-                    // Only include full rules if it's the first occurrence
-                    ...(!seenRulesBefore && { matchedRules }),
-                    matchedRulesHash: rulesHash,
-                    computedStyles,
-                  }
-                };
-              }
-              
-              // Process up to resultLimit elements
-              const elementsToProcess = Math.min(elements.length, limit);
-              const results = [];
-              
-              for (let i = 0; i < elementsToProcess; i++) {
-                results.push(processElement(elements[i], i));
-              }
-              
+            
+              // Return basic info about the elements
               return {
-                elements: results,
-                totalCount: elements.length,
-                processedCount: elementsToProcess,
-                // selector: selector,
-                // Include the stores for the hashed content
-                // htmlStore,
-                // ruleStore,
+                count: elements.length,
+                elements: Array.from(elements).slice(0, resultLimit).map((el, i) => {
+                  const rect = el.getBoundingClientRect();
+                  return {
+                    index: i,
+                    html: el.outerHTML,
+                    dimensions: {
+                      offsetWidth: el.offsetWidth,
+                      offsetHeight: el.offsetHeight,
+                      clientWidth: el.clientWidth,
+                      clientHeight: el.clientHeight
+                    },
+                    // Extract individual properties from rect as it is not directly JSON serializable
+                    boundingClientRect: {
+                      top: rect.top,
+                      right: rect.right,
+                      bottom: rect.bottom,
+                      left: rect.left,
+                      width: rect.width,
+                      height: rect.height,
+                      x: rect.x,
+                      y: rect.y
+                    },
+                    // We'll add unique ID to each element to target it later
+                    uniqueSelector: '[data-temp-id="' + i + '"]'
+                  };
+                })
               };
-            } catch (error) {
-              return { error: "Error processing elements: " + error.message };
-            }
-          };
-          
-          // Execute script in the inspected window with cleaner syntax
-          chrome.devtools.inspectedWindow.eval(
-            `(${inspectionFunction.toString()})('${message.selector.replace(/'/g, "\\'")}', ${resultLimit}, ${JSON.stringify(includeComputedStyles)})`,
-            (result, isException) => {
-              if (isException || !result) {
-                console.error("Chrome Extension: Error inspecting elements by selector:", isException || "No result");
-                ws.send(
-                  JSON.stringify({
-                    type: "inspect-elements-error",
-                    error: isException?.value || "Failed to inspect elements by selector",
-                    requestId: message.requestId,
-                  })
-                );
-                return;
-              }
-              
-              // Check if result is an error object
-              if (result && result.error) {
-                console.error("Chrome Extension: Inspect elements by selector error:", result.error);
-                ws.send(
-                  JSON.stringify({
-                    type: "inspect-elements-error",
-                    error: result.error,
-                    requestId: message.requestId,
-                  })
-                );
-                return;
-              }
-              
-              console.log(`Chrome Extension: Found ${result.totalCount} elements, processed ${result.processedCount}`);
-              
-              // Send back the elements with styles data
+            }.toString(), [message.selector, resultLimit]);
+
+            if (elementsInfoException || !elementsInfo) {
+              console.error(
+                "Chrome Extension: Error finding elements:",
+                elementsInfoException || "No result"
+              );
               ws.send(
                 JSON.stringify({
-                  type: "inspect-elements-response",
-                  data: result,
+                  type: "inspect-elements-error",
+                  error:
+                    elementsInfoException?.value ||
+                    "Failed to find elements by selector",
                   requestId: message.requestId,
                 })
               );
+              return;
             }
-          );
+
+            if (elementsInfo.error) {
+              console.error(
+                "Chrome Extension: Element selection error:",
+                elementsInfo.error
+              );
+              ws.send(
+                JSON.stringify({
+                  type: "inspect-elements-error",
+                  error: elementsInfo.error,
+                  requestId: message.requestId,
+                })
+              );
+              return;
+            }
+
+            const results = [];
+            const ruleStore = {};
+            const seenRules = new Set();
+
+            // Process each element's style rules using CDP
+            for (const element of elementsInfo.elements) {
+              try {
+                // Add temporary attribute to target this specific element
+                const uniqueAttrName = "data-temp-id";
+                const uniqueAttrValue = element.index.toString();
+
+                // Add the attribute to the element
+                const [, setAttributeException] = await windowEval(function (selector, index, uniqueAttrName, uniqueAttrValue) {
+                  document.querySelectorAll(selector)[index].setAttribute(uniqueAttrName, uniqueAttrValue)
+                }, [message.selector, element.index, uniqueAttrName, uniqueAttrValue]);
+                if (setAttributeException) {
+                  console.error("Error setting temp attribute:", setAttributeException);
+                }
+
+                // Give a small delay for the attribute to be set
+                await new Promise((resolve) => setTimeout(resolve, 10));
+
+                // Get matched styles using CDP
+                try {
+                  // Step 1: Get the document root
+                  const root = await sendCommand("DOM.getDocument", {
+                    depth: 1,
+                  });
+
+                  // Step 2: Get the node using the unique attribute
+                  const node = await sendCommand("DOM.querySelector", {
+                    nodeId: root.root.nodeId,
+                    selector: `[${uniqueAttrName}="${uniqueAttrValue}"]`,
+                  });
+
+                  if (!node || !node.nodeId) {
+                    throw new Error(
+                      "Element not found with temp attribute"
+                    );
+                  }
+
+                  // Step 4: Get the matched styles
+                  const matchedStyles = await sendCommand(
+                    "CSS.getMatchedStylesForNode",
+                    {
+                      nodeId: node.nodeId,
+                    }
+                  );
+
+                  // Process the matched styles
+                  const matchedRules = [];
+
+                  if (matchedStyles && matchedStyles.matchedCSSRules) {
+                    // Process each matched rule
+                    matchedStyles.matchedCSSRules.forEach((match) => {
+                      const rule = match.rule;
+
+                      // Get the actual matched selector from the rule's selectorList
+                      const selectorIndex = match.matchingSelectors[0];
+                      const selectorInfo =
+                        rule.selectorList.selectors[selectorIndex];
+
+                      // Process arrays to only include specified properties
+                      const processedMedia =
+                        rule.media?.map((item) => ({
+                          text: item.text,
+                          source: item.source,
+                          sourceURL: item.sourceURL,
+                        })) || [];
+
+                      const processedLayers =
+                        rule.layers?.map((item) => ({
+                          text: item.text,
+                        })) || [];
+
+                      const processedSupports =
+                        rule.supports
+                          ?.filter((item) => item.active)
+                          .map((item) => ({ text: item.text })) || [];
+
+                      const processedScopes =
+                        rule.scopes?.map((item) => ({
+                          text: item.text,
+                        })) || [];
+
+                      const processedContainerQueries =
+                        rule.containerQueries?.map((item) => ({
+                          text: item.text,
+                          name: item.name,
+                          physicalAxes: item.physicalAxes,
+                          logicalAxes: item.logicalAxes,
+                          queriesScrollState: item.queriesScrollState,
+                        })) || [];
+
+                      matchedRules.push({
+                        origin: rule.origin, // 'user-agent' or 'regular'
+                        cssText: rule.style.cssText,
+                        styleSheet: {
+                          href: rule.styleSheetId || "inline",
+                          // Use the stylesheet list if available, otherwise fallback to a safe default
+                          index:
+                            styleSheets.findIndex(
+                              (sheet) =>
+                                sheet.styleSheetId === rule.styleSheetId
+                            ) || 0,
+                        },
+                        specificity: selectorInfo.specificity,
+                        // additional info
+                        media:
+                          processedMedia.length > 0
+                            ? processedMedia
+                            : undefined,
+                        layers:
+                          processedLayers.length > 0
+                            ? processedLayers
+                            : undefined,
+                        supports:
+                          processedSupports.length > 0
+                            ? processedSupports
+                            : undefined,
+                        scopes:
+                          processedScopes.length > 0
+                            ? processedScopes
+                            : undefined,
+                        containerQueries:
+                          processedContainerQueries.length > 0
+                            ? processedContainerQueries
+                            : undefined,
+                        // rulesTypes is an array of enumerations / strings
+                        ruleTypes:
+                          rule.ruleTypes && rule.ruleTypes.length > 0
+                            ? rule.ruleTypes
+                            : undefined,
+                      });
+                    });
+                  }
+
+                  // Sort rules by specificity
+                  matchedRules.sort((a, b) => {
+                    // Helper function to compare specificity objects
+                    function compareSpecificity(specA, specB) {
+                      // Sort first by specificity (a, b, c values)
+                      if (specA.a !== specB.a) {
+                        return specB.a - specA.a;
+                      }
+                      if (specA.b !== specB.b) {
+                        return specB.b - specA.b;
+                      }
+                      if (specA.c !== specB.c) {
+                        return specB.c - specA.c;
+                      }
+
+                      // Equal specificity
+                      return 0;
+                    }
+
+                    // First compare by specificity
+                    const specCompare = compareSpecificity(
+                      a.specificity,
+                      b.specificity
+                    );
+
+                    // If specificities are equal, sort by stylesheet order
+                    return specCompare !== 0
+                      ? specCompare
+                      : b.styleSheet.index - a.styleSheet.index;
+                  });
+
+                  // Get computed styles if requested
+                  let computedStyles;
+                  if (
+                    Array.isArray(includeComputedStyles) &&
+                    includeComputedStyles.length > 0
+                  ) {
+                    const [computedStylesResult, computedStylesException] = await windowEval(function (uniqueAttrName, uniqueAttrValue, includeComputedStyles) {
+                      const el = document.querySelector(`[${uniqueAttrName}="${uniqueAttrValue}"]`);
+                      if (!el) return {};
+                      
+                      const styles = window.getComputedStyle(el);
+                      return includeComputedStyles.reduce((result, prop) => {
+                        result[prop] = styles.getPropertyValue(prop);
+                        return result;
+                      }, {});
+                    }, [uniqueAttrName, uniqueAttrValue, includeComputedStyles]);
+                    if (computedStylesException) {
+                      console.error("Error getting computed styles:", computedStylesException);
+                    } else if (Object.keys(computedStylesResult).length > 0) {
+                      computedStyles = computedStylesResult;
+                    }
+                  }
+
+                  // Create hash for rules
+                  const fnv1a = (str) => {
+                    let h = 0x811c9dc5;
+                    for (let i = 0; i < str.length; i++) {
+                      h ^= str.charCodeAt(i);
+                      h +=
+                        (h << 1) +
+                        (h << 4) +
+                        (h << 7) +
+                        (h << 8) +
+                        (h << 24);
+                    }
+                    return (h >>> 0).toString(36);
+                  };
+
+                  // Hash the rules
+                  const rulesJson = JSON.stringify(matchedRules);
+                  const rulesHash = fnv1a(rulesJson);
+
+                  // Check if we've seen these rules before
+                  let seenRulesBefore = false;
+                  if (!seenRules.has(rulesHash)) {
+                    ruleStore[rulesHash] = matchedRules;
+                    seenRules.add(rulesHash);
+                  } else {
+                    seenRulesBefore = true;
+                  }
+
+                  // Store the element with style info
+                  results.push({
+                    ...element,
+                    styles: {
+                      // Only include full rules if it's the first occurrence
+                      ...(!seenRulesBefore && { matchedRules }),
+                      matchedRulesHash: rulesHash,
+                      computedStyles,
+                    },
+                  });
+                } catch (error) {
+                  console.error("Error processing element styles:", error);
+                  // Still add the element but with error info
+                  results.push({
+                    ...element,
+                    styles: {
+                      error: error.message,
+                    },
+                  });
+                } finally {
+                  // Remove the temporary attribute
+                  const [, removeAttributeException] = await windowEval(function (uniqueAttrName, uniqueAttrValue) {
+                    const el = document.querySelector(`[${uniqueAttrName}="${uniqueAttrValue}"]`);
+                    if (el) el.removeAttribute(uniqueAttrName);
+                  }, [uniqueAttrName, uniqueAttrValue]);
+                  if (removeAttributeException) {
+                    console.warn("Error removing temporary attribute:", removeAttributeException);
+                  }
+                }
+              } catch (error) {
+                console.error("Error in element processing:", error);
+              }
+            }
+
+            // Final processing - sort by original index
+            results.sort((a, b) => a.index - b.index);
+
+            // Prepare and send the final result
+            const finalResult = {
+              elements: results,
+              totalCount: elementsInfo.count,
+              processedCount: results.length,
+              // Send this only if we need in future. Keep response payload small.
+              // ruleStore,
+            };
+
+            console.log(
+              `Chrome Extension: Found ${finalResult.totalCount} elements, processed ${finalResult.processedCount}`
+            );
+
+            // Send back the elements with styles data
+            ws.send(
+              JSON.stringify({
+                type: "inspect-elements-response",
+                data: finalResult,
+                requestId: message.requestId,
+              })
+            );
+          } catch (error) {
+            console.error(
+              "Chrome Extension: Error in element inspection process:",
+              error
+            );
+            ws.send(
+              JSON.stringify({
+                type: "inspect-elements-error",
+                error: error.message || "Unknown error in inspection process",
+                requestId: message.requestId,
+              })
+            );
+          }
         } else if (message.type === "get-current-url") {
           console.log("Chrome Extension: Received request for current URL");
 
