@@ -453,8 +453,13 @@ function wipeLogs() {
     });
 }
 
+// Listen for styleSheetAdded events
+let styleSheets = [];
+
 // Listen for page refreshes
 chrome.devtools.network.onNavigated.addListener((url) => {
+  // Reset the styleSheets array on navigation/refresh
+  styleSheets = [];
   console.log("Page navigated/refreshed - wiping logs");
   wipeLogs();
 
@@ -540,13 +545,10 @@ async function sendCommand(method, params = {}) {
   });
 };
 
-// Listen for styleSheetAdded events
-let styleSheets = [];
-
 // Create a stylesheet event listener
 const styleSheetEventListener = (source, method, params) => {
   // Only process events for our tab
-  if (source.tabId !== chrome.devtools.inspectedWindow.tabId) {
+  if (source.tabId !== currentTabId) {
     return;
   }
 
@@ -573,17 +575,18 @@ function performAttach() {
     isDebuggerAttached = true;
     console.log("Debugger successfully attached");
 
-    // Step 2: Enable domains (these may fail if already enabled, that's OK)
-    try {
-      await sendCommand("DOM.enable");
-    } catch (e) {}
-    try {
-      await sendCommand("CSS.enable");
-    } catch (e) {}
-
     // Add the event listener when attaching
     chrome.debugger.onEvent.addListener(consoleMessageListener);
     chrome.debugger.onEvent.addListener(styleSheetEventListener);
+
+    // Enable domains (these may fail if already enabled, that's OK)
+    try {
+      await sendCommand("DOM.enable");
+    } catch (e) {}
+    // Enable CSS domain to start receiving stylesheet events
+    try {
+      await sendCommand("CSS.enable");
+    } catch (e) {}
 
     try {
       await sendCommand("Runtime.enable", {});
@@ -747,7 +750,6 @@ async function windowEval(func, args) {
   }).join(", ");
   const funcString = typeof func === "string" ? func : func.toString();
   const evalString = `(${funcString})(${stringifiedArgs})`;
-  console.log("Evaluating:", evalString);
   return new Promise((resolve) => {
     chrome.devtools.inspectedWindow.eval(evalString, (resultInner, exceptionInner) => {
       resolve([resultInner, exceptionInner]);
@@ -1094,8 +1096,10 @@ async function setupWebSocket() {
                 count: elements.length,
                 elements: Array.from(elements).slice(0, resultLimit).map((el, i) => {
                   const rect = el.getBoundingClientRect();
+                  const randomId = Math.random().toString(36).substring(2);
+                  el.setAttribute(`data-${randomId}`, "1");
                   return {
-                    index: i,
+                    // index: i,
                     html: el.outerHTML,
                     dimensions: {
                       offsetWidth: el.offsetWidth,
@@ -1114,18 +1118,14 @@ async function setupWebSocket() {
                       x: rect.x,
                       y: rect.y
                     },
-                    // We'll add unique ID to each element to target it later
-                    uniqueSelector: '[data-temp-id="' + i + '"]'
+                    uniqueId: randomId,
                   };
                 })
               };
             }.toString(), [message.selector, resultLimit]);
 
             if (elementsInfoException || !elementsInfo) {
-              console.error(
-                "Chrome Extension: Error finding elements:",
-                elementsInfoException || "No result"
-              );
+              console.error("Chrome Extension: Error finding elements:", elementsInfoException || "No result");
               ws.send(
                 JSON.stringify({
                   type: "inspect-elements-error",
@@ -1139,10 +1139,7 @@ async function setupWebSocket() {
             }
 
             if (elementsInfo.error) {
-              console.error(
-                "Chrome Extension: Element selection error:",
-                elementsInfo.error
-              );
+              console.error("Chrome Extension: Element selection error:", elementsInfo.error);
               ws.send(
                 JSON.stringify({
                   type: "inspect-elements-error",
@@ -1160,17 +1157,6 @@ async function setupWebSocket() {
             // Process each element's style rules using CDP
             for (const element of elementsInfo.elements) {
               try {
-                // Add temporary attribute to target this specific element
-                const uniqueAttrName = "data-temp-id";
-                const uniqueAttrValue = element.index.toString();
-
-                // Add the attribute to the element
-                const [, setAttributeException] = await windowEval(function (selector, index, uniqueAttrName, uniqueAttrValue) {
-                  document.querySelectorAll(selector)[index].setAttribute(uniqueAttrName, uniqueAttrValue)
-                }, [message.selector, element.index, uniqueAttrName, uniqueAttrValue]);
-                if (setAttributeException) {
-                  console.error("Error setting temp attribute:", setAttributeException);
-                }
 
                 // Give a small delay for the attribute to be set
                 await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1185,21 +1171,17 @@ async function setupWebSocket() {
                   // Step 2: Get the node using the unique attribute
                   const node = await sendCommand("DOM.querySelector", {
                     nodeId: root.root.nodeId,
-                    selector: `[${uniqueAttrName}="${uniqueAttrValue}"]`,
+                    selector: `[data-${element.uniqueId}="1"]`,
                   });
 
                   if (!node || !node.nodeId) {
-                    throw new Error(
-                      "Element not found with temp attribute"
-                    );
+                    throw new Error("Element not found with temp attribute");
                   }
 
                   // Step 4: Get the matched styles
                   const matchedStyles = await sendCommand(
                     "CSS.getMatchedStylesForNode",
-                    {
-                      nodeId: node.nodeId,
-                    }
+                    { nodeId: node.nodeId }
                   );
 
                   // Process the matched styles
@@ -1207,13 +1189,21 @@ async function setupWebSocket() {
 
                   if (matchedStyles && matchedStyles.matchedCSSRules) {
                     // Process each matched rule
-                    matchedStyles.matchedCSSRules.forEach((match) => {
+                    for (const match of matchedStyles.matchedCSSRules) {
                       const rule = match.rule;
 
                       // Get the actual matched selector from the rule's selectorList
-                      const selectorIndex = match.matchingSelectors[0];
-                      const selectorInfo =
-                        rule.selectorList.selectors[selectorIndex];
+                      const matchedSelectors = (match?.matchingSelectors || [])
+                        .map((index) => (rule?.selectorList?.selectors[index]))
+                        .filter((v) => v !== undefined)
+                        .map((selector) => ({
+                          text: selector.text,
+                          specificity: selector.specificity ? [
+                            selector.specificity.a,
+                            selector.specificity.b,
+                            selector.specificity.c,
+                          ] : undefined,
+                        }));
 
                       // Process arrays to only include specified properties
                       const processedMedia =
@@ -1247,19 +1237,40 @@ async function setupWebSocket() {
                           queriesScrollState: item.queriesScrollState,
                         })) || [];
 
+                      const styleSheetIndex = styleSheets.findIndex(
+                        (sheet) => sheet.styleSheetId === rule.styleSheetId
+                      );
+                      let styleSheet = styleSheets[styleSheetIndex];
+                      let styleSheetSource;
+                      if (styleSheet?.ownerNode) {
+                        const resolvedNode = await sendCommand(
+                          "DOM.resolveNode",
+                          { backendNodeId: styleSheet.ownerNode }
+                        );
+                        const evaluateResponse = await sendCommand(
+                          "Runtime.callFunctionOn",
+                          {
+                            objectId: resolvedNode.object.objectId,
+                            functionDeclaration: `function () {
+                              const startTagRegex = ${
+                                /(<([a-zA-Z][^\s\/>]*)(?:\s+[^\s\/>"'=]+(?:\s*=\s*(?:(?:"[^"]*")|(?:'[^']*')|[^>\s]+))?)*\s*(\/?)\s*>)/.toString()
+                              };
+                              const startTag = this.outerHTML.match(startTagRegex)?.[0];
+                              return startTag;
+                            }`
+                          }
+                        );
+                        styleSheetSource = evaluateResponse.result.value;
+                      }
+
                       matchedRules.push({
-                        origin: rule.origin, // 'user-agent' or 'regular'
-                        cssText: rule.style.cssText,
-                        styleSheet: {
-                          href: rule.styleSheetId || "inline",
-                          // Use the stylesheet list if available, otherwise fallback to a safe default
-                          index:
-                            styleSheets.findIndex(
-                              (sheet) =>
-                                sheet.styleSheetId === rule.styleSheetId
-                            ) || 0,
-                        },
-                        specificity: selectorInfo.specificity,
+                        origin: rule.origin, // 'user-agent', 'regular', 'inspector' or 'injected'
+                        fullSelector: rule.selectorList?.text,
+                        body: rule.style.cssText || (rule.style.cssProperties || [])
+                          .map((property) => `${property.name}: ${property.value}`)
+                          .join("; "),
+                        matchedSelectors: matchedSelectors,
+                        source: styleSheetSource,
                         // additional info
                         media:
                           processedMedia.length > 0
@@ -1287,39 +1298,11 @@ async function setupWebSocket() {
                             ? rule.ruleTypes
                             : undefined,
                       });
-                    });
+                    };
                   }
 
-                  // Sort rules by specificity
-                  matchedRules.sort((a, b) => {
-                    // Helper function to compare specificity objects
-                    function compareSpecificity(specA, specB) {
-                      // Sort first by specificity (a, b, c values)
-                      if (specA.a !== specB.a) {
-                        return specB.a - specA.a;
-                      }
-                      if (specA.b !== specB.b) {
-                        return specB.b - specA.b;
-                      }
-                      if (specA.c !== specB.c) {
-                        return specB.c - specA.c;
-                      }
-
-                      // Equal specificity
-                      return 0;
-                    }
-
-                    // First compare by specificity
-                    const specCompare = compareSpecificity(
-                      a.specificity,
-                      b.specificity
-                    );
-
-                    // If specificities are equal, sort by stylesheet order
-                    return specCompare !== 0
-                      ? specCompare
-                      : b.styleSheet.index - a.styleSheet.index;
-                  });
+                  // Sort rules by most specific to least specific
+                  matchedRules.reverse();
 
                   // Get computed styles if requested
                   let computedStyles;
@@ -1327,8 +1310,8 @@ async function setupWebSocket() {
                     Array.isArray(includeComputedStyles) &&
                     includeComputedStyles.length > 0
                   ) {
-                    const [computedStylesResult, computedStylesException] = await windowEval(function (uniqueAttrName, uniqueAttrValue, includeComputedStyles) {
-                      const el = document.querySelector(`[${uniqueAttrName}="${uniqueAttrValue}"]`);
+                    const [computedStylesResult, computedStylesException] = await windowEval(function (uniqueId, includeComputedStyles) {
+                      const el = document.querySelector(`[data-${uniqueId}="1"]`);
                       if (!el) return {};
                       
                       const styles = window.getComputedStyle(el);
@@ -1336,7 +1319,7 @@ async function setupWebSocket() {
                         result[prop] = styles.getPropertyValue(prop);
                         return result;
                       }, {});
-                    }, [uniqueAttrName, uniqueAttrValue, includeComputedStyles]);
+                    }, [element.uniqueId, includeComputedStyles]);
                     if (computedStylesException) {
                       console.error("Error getting computed styles:", computedStylesException);
                     } else if (Object.keys(computedStylesResult).length > 0) {
@@ -1375,6 +1358,7 @@ async function setupWebSocket() {
                   // Store the element with style info
                   results.push({
                     ...element,
+                    uniqueId: undefined, // remove temporary attribute
                     styles: {
                       // Only include full rules if it's the first occurrence
                       ...(!seenRulesBefore && { matchedRules }),
@@ -1393,10 +1377,9 @@ async function setupWebSocket() {
                   });
                 } finally {
                   // Remove the temporary attribute
-                  const [, removeAttributeException] = await windowEval(function (uniqueAttrName, uniqueAttrValue) {
-                    const el = document.querySelector(`[${uniqueAttrName}="${uniqueAttrValue}"]`);
-                    if (el) el.removeAttribute(uniqueAttrName);
-                  }, [uniqueAttrName, uniqueAttrValue]);
+                  const [, removeAttributeException] = await windowEval(function (uniqueId) {
+                    document.querySelector(`[data-${uniqueId}="1"]`).removeAttribute(`data-${uniqueId}`)
+                  }, element.uniqueId);
                   if (removeAttributeException) {
                     console.warn("Error removing temporary attribute:", removeAttributeException);
                   }
@@ -1418,9 +1401,7 @@ async function setupWebSocket() {
               // ruleStore,
             };
 
-            console.log(
-              `Chrome Extension: Found ${finalResult.totalCount} elements, processed ${finalResult.processedCount}`
-            );
+            console.log(`Chrome Extension: Found ${finalResult.totalCount} elements, processed ${finalResult.processedCount}`);
 
             // Send back the elements with styles data
             ws.send(
@@ -1431,10 +1412,7 @@ async function setupWebSocket() {
               })
             );
           } catch (error) {
-            console.error(
-              "Chrome Extension: Error in element inspection process:",
-              error
-            );
+            console.error("Chrome Extension: Error in element inspection process:", error);
             ws.send(
               JSON.stringify({
                 type: "inspect-elements-error",
