@@ -26,6 +26,8 @@ Check out our project roadmap here: [Github Roadmap / Project Board](https://git
 
 ## Updates
 
+v1.2.3 - Added ability for agent to inspect any element's HTML, computed styling and dimensions.
+
 v1.2.0 is out! Here's a quick breakdown of the update:
 - You can now enable "Allow Auto-Paste into Cursor" within the DevTools panel. Screenshots will be automatically pasted into Cursor (just make sure to focus/click into the Agent input field in Cursor, otherwise it won't work!)
 - Integrated a suite of SEO, performance, accessibility, and best practice analysis tools via Lighthouse
