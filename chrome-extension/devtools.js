@@ -1247,25 +1247,35 @@ async function setupWebSocket() {
                       );
                       let styleSheet = styleSheets[styleSheetIndex];
                       let styleSheetSource;
-                      if (styleSheet?.ownerNode) {
-                        const resolvedNode = await sendCommand(
-                          "DOM.resolveNode",
-                          { backendNodeId: styleSheet.ownerNode }
-                        );
-                        const evaluateResponse = await sendCommand(
-                          "Runtime.callFunctionOn",
-                          {
-                            objectId: resolvedNode.object.objectId,
-                            functionDeclaration: `function () {
-                              const startTagRegex = ${
-                                /(<([a-zA-Z][^\s\/>]*)(?:\s+[^\s\/>"'=]+(?:\s*=\s*(?:(?:"[^"]*")|(?:'[^']*')|[^>\s]+))?)*\s*(\/?)\s*>)/.toString()
-                              };
-                              const startTag = this.outerHTML.match(startTagRegex)?.[0];
-                              return startTag;
-                            }`
-                          }
-                        );
-                        styleSheetSource = evaluateResponse.result.value;
+                      
+                      // Skip chrome extension stylesheets to avoid cross-extension access errors
+                      const isExtensionStylesheet = styleSheet?.sourceURL?.startsWith('chrome-extension://');
+                      
+                      if (styleSheet?.ownerNode && !isExtensionStylesheet) {
+                        try {
+                          const resolvedNode = await sendCommand(
+                            "DOM.resolveNode",
+                            { backendNodeId: styleSheet.ownerNode }
+                          );
+                          const evaluateResponse = await sendCommand(
+                            "Runtime.callFunctionOn",
+                            {
+                              objectId: resolvedNode.object.objectId,
+                              functionDeclaration: `function () {
+                                const startTagRegex = ${
+                                  /(<([a-zA-Z][^\s\/>]*)(?:\s+[^\s\/>"'=]+(?:\s*=\s*(?:(?:"[^"]*")|(?:'[^']*')|[^>\s]+))?)*\s*(\/?)\s*>)/.toString()
+                                };
+                                const startTag = this.outerHTML.match(startTagRegex)?.[0];
+                                return startTag;
+                              }`
+                            }
+                          );
+                          styleSheetSource = evaluateResponse.result.value;
+                        } catch (error) {
+                          console.warn("Failed to resolve stylesheet owner node:", error.message);
+                        }
+                      } else if (isExtensionStylesheet) {
+                        console.log("Skipping chrome extension stylesheet:", styleSheet?.sourceURL);
                       }
 
                       matchedRules.push({
