@@ -543,7 +543,7 @@ async function sendCommand(method, params = {}) {
       }
     );
   });
-};
+}
 
 // Create a stylesheet event listener
 const styleSheetEventListener = (source, method, params) => {
@@ -734,26 +734,31 @@ window.addEventListener("unload", () => {
 });
 
 /**
- * 
- * @param {Function|string} func 
- * @param {(string | number)[]} args 
+ *
+ * @param {Function|string} func
+ * @param {(string | number)[]} args
  */
 async function windowEval(func, args) {
-  const stringifiedArgs = args.map((arg) => {
-    if (typeof arg === "string") {
-      return JSON.stringify(arg);
-    }
-    if (Array.isArray(arg)) {
-      return `JSON.parse(${JSON.stringify(JSON.stringify(arg))})`;
-    }
-    return arg;
-  }).join(", ");
+  const stringifiedArgs = args
+    .map((arg) => {
+      if (typeof arg === "string") {
+        return JSON.stringify(arg);
+      }
+      if (Array.isArray(arg)) {
+        return `JSON.parse(${JSON.stringify(JSON.stringify(arg))})`;
+      }
+      return arg;
+    })
+    .join(", ");
   const funcString = typeof func === "string" ? func : func.toString();
   const evalString = `(${funcString})(${stringifiedArgs})`;
   return new Promise((resolve) => {
-    chrome.devtools.inspectedWindow.eval(evalString, (resultInner, exceptionInner) => {
-      resolve([resultInner, exceptionInner]);
-    });
+    chrome.devtools.inspectedWindow.eval(
+      evalString,
+      (resultInner, exceptionInner) => {
+        resolve([resultInner, exceptionInner]);
+      }
+    );
   });
 }
 
@@ -1084,53 +1089,61 @@ async function setupWebSocket() {
           // Now start the inspection process
           try {
             // First check if elements exist and get basic info about them using eval
-            const [elementsInfo, elementsInfoException] = await windowEval(function (selector, resultLimit) {
-              // DO NOT have any closures in this entire function, because the function is stringified.
-              let elements = [];
-              if (selector === "$0") {
-                elements = [$0];
-              } else {
-                elements = document.querySelectorAll(selector);
-              }
-              if (elements.length === 0) {
-                return { error: "No elements found matching selector" };
-              }
-            
-              // Return basic info about the elements
-              return {
-                count: elements.length,
-                elements: Array.from(elements).slice(0, resultLimit).map((el, i) => {
-                  const rect = el.getBoundingClientRect();
-                  const randomId = Math.random().toString(36).substring(2);
-                  el.setAttribute(`data-${randomId}`, "1");
-                  return {
-                    // index: i,
-                    html: el.outerHTML,
-                    dimensions: {
-                      offsetWidth: el.offsetWidth,
-                      offsetHeight: el.offsetHeight,
-                      clientWidth: el.clientWidth,
-                      clientHeight: el.clientHeight
-                    },
-                    // Extract individual properties from rect as it is not directly JSON serializable
-                    boundingClientRect: {
-                      top: rect.top,
-                      right: rect.right,
-                      bottom: rect.bottom,
-                      left: rect.left,
-                      width: rect.width,
-                      height: rect.height,
-                      x: rect.x,
-                      y: rect.y
-                    },
-                    uniqueId: randomId,
-                  };
-                })
-              };
-            }.toString(), [message.selector, resultLimit]);
+            const [elementsInfo, elementsInfoException] = await windowEval(
+              function (selector, resultLimit) {
+                // DO NOT have any closures in this entire function, because the function is stringified.
+                let elements = [];
+                if (selector === "$0") {
+                  elements = [$0];
+                } else {
+                  elements = document.querySelectorAll(selector);
+                }
+                if (elements.length === 0) {
+                  return { error: "No elements found matching selector" };
+                }
+
+                // Return basic info about the elements
+                return {
+                  count: elements.length,
+                  elements: Array.from(elements)
+                    .slice(0, resultLimit)
+                    .map((el, i) => {
+                      const rect = el.getBoundingClientRect();
+                      const randomId = Math.random().toString(36).substring(2);
+                      el.setAttribute(`data-${randomId}`, "1");
+                      return {
+                        // index: i,
+                        html: el.outerHTML,
+                        dimensions: {
+                          offsetWidth: el.offsetWidth,
+                          offsetHeight: el.offsetHeight,
+                          clientWidth: el.clientWidth,
+                          clientHeight: el.clientHeight,
+                        },
+                        // Extract individual properties from rect as it is not directly JSON serializable
+                        boundingClientRect: {
+                          top: rect.top,
+                          right: rect.right,
+                          bottom: rect.bottom,
+                          left: rect.left,
+                          width: rect.width,
+                          height: rect.height,
+                          x: rect.x,
+                          y: rect.y,
+                        },
+                        uniqueId: randomId,
+                      };
+                    }),
+                };
+              }.toString(),
+              [message.selector, resultLimit]
+            );
 
             if (elementsInfoException || !elementsInfo) {
-              console.error("Chrome Extension: Error finding elements:", elementsInfoException || "No result");
+              console.error(
+                "Chrome Extension: Error finding elements:",
+                elementsInfoException || "No result"
+              );
               ws.send(
                 JSON.stringify({
                   type: "inspect-elements-error",
@@ -1144,7 +1157,10 @@ async function setupWebSocket() {
             }
 
             if (elementsInfo.error) {
-              console.error("Chrome Extension: Element selection error:", elementsInfo.error);
+              console.error(
+                "Chrome Extension: Element selection error:",
+                elementsInfo.error
+              );
               ws.send(
                 JSON.stringify({
                   type: "inspect-elements-error",
@@ -1162,7 +1178,6 @@ async function setupWebSocket() {
             // Process each element's style rules using CDP
             for (const element of elementsInfo.elements) {
               try {
-
                 // Give a small delay for the attribute to be set
                 await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -1199,15 +1214,17 @@ async function setupWebSocket() {
 
                       // Get the actual matched selector from the rule's selectorList
                       const matchedSelectors = (match?.matchingSelectors || [])
-                        .map((index) => (rule?.selectorList?.selectors[index]))
+                        .map((index) => rule?.selectorList?.selectors[index])
                         .filter((v) => v !== undefined)
                         .map((selector) => ({
                           text: selector.text,
-                          specificity: selector.specificity ? [
-                            selector.specificity.a,
-                            selector.specificity.b,
-                            selector.specificity.c,
-                          ] : undefined,
+                          specificity: selector.specificity
+                            ? [
+                                selector.specificity.a,
+                                selector.specificity.b,
+                                selector.specificity.c,
+                              ]
+                            : undefined,
                         }));
 
                       // Process arrays to only include specified properties
@@ -1247,10 +1264,13 @@ async function setupWebSocket() {
                       );
                       let styleSheet = styleSheets[styleSheetIndex];
                       let styleSheetSource;
-                      
+
                       // Skip chrome extension stylesheets to avoid cross-extension access errors
-                      const isExtensionStylesheet = styleSheet?.sourceURL?.startsWith('chrome-extension://');
-                      
+                      const isExtensionStylesheet =
+                        styleSheet?.sourceURL?.startsWith(
+                          "chrome-extension://"
+                        );
+
                       if (styleSheet?.ownerNode && !isExtensionStylesheet) {
                         try {
                           const resolvedNode = await sendCommand(
@@ -1262,28 +1282,37 @@ async function setupWebSocket() {
                             {
                               objectId: resolvedNode.object.objectId,
                               functionDeclaration: `function () {
-                                const startTagRegex = ${
-                                  /(<([a-zA-Z][^\s\/>]*)(?:\s+[^\s\/>"'=]+(?:\s*=\s*(?:(?:"[^"]*")|(?:'[^']*')|[^>\s]+))?)*\s*(\/?)\s*>)/.toString()
-                                };
+                                const startTagRegex = ${/(<([a-zA-Z][^\s\/>]*)(?:\s+[^\s\/>"'=]+(?:\s*=\s*(?:(?:"[^"]*")|(?:'[^']*')|[^>\s]+))?)*\s*(\/?)\s*>)/.toString()};
                                 const startTag = this.outerHTML.match(startTagRegex)?.[0];
                                 return startTag;
-                              }`
+                              }`,
                             }
                           );
                           styleSheetSource = evaluateResponse.result.value;
                         } catch (error) {
-                          console.warn("Failed to resolve stylesheet owner node:", error.message);
+                          console.warn(
+                            "Failed to resolve stylesheet owner node:",
+                            error.message
+                          );
                         }
                       } else if (isExtensionStylesheet) {
-                        console.log("Skipping chrome extension stylesheet:", styleSheet?.sourceURL);
+                        console.log(
+                          "Skipping chrome extension stylesheet:",
+                          styleSheet?.sourceURL
+                        );
                       }
 
                       matchedRules.push({
                         origin: rule.origin, // 'user-agent', 'regular', 'inspector' or 'injected'
                         fullSelector: rule.selectorList?.text,
-                        body: rule.style.cssText || (rule.style.cssProperties || [])
-                          .map((property) => `${property.name}: ${property.value}`)
-                          .join("; "),
+                        body:
+                          rule.style.cssText ||
+                          (rule.style.cssProperties || [])
+                            .map(
+                              (property) =>
+                                `${property.name}: ${property.value}`
+                            )
+                            .join("; "),
                         matchedSelectors: matchedSelectors,
                         source: styleSheetSource,
                         // additional info
@@ -1313,7 +1342,7 @@ async function setupWebSocket() {
                             ? rule.ruleTypes
                             : undefined,
                       });
-                    };
+                    }
                   }
 
                   // Sort rules by most specific to least specific
@@ -1325,18 +1354,30 @@ async function setupWebSocket() {
                     Array.isArray(includeComputedStyles) &&
                     includeComputedStyles.length > 0
                   ) {
-                    const [computedStylesResult, computedStylesException] = await windowEval(function (uniqueId, includeComputedStyles) {
-                      const el = document.querySelector(`[data-${uniqueId}="1"]`);
-                      if (!el) return {};
-                      
-                      const styles = window.getComputedStyle(el);
-                      return includeComputedStyles.reduce((result, prop) => {
-                        result[prop] = styles.getPropertyValue(prop);
-                        return result;
-                      }, {});
-                    }, [element.uniqueId, includeComputedStyles]);
+                    const [computedStylesResult, computedStylesException] =
+                      await windowEval(
+                        function (uniqueId, includeComputedStyles) {
+                          const el = document.querySelector(
+                            `[data-${uniqueId}="1"]`
+                          );
+                          if (!el) return {};
+
+                          const styles = window.getComputedStyle(el);
+                          return includeComputedStyles.reduce(
+                            (result, prop) => {
+                              result[prop] = styles.getPropertyValue(prop);
+                              return result;
+                            },
+                            {}
+                          );
+                        },
+                        [element.uniqueId, includeComputedStyles]
+                      );
                     if (computedStylesException) {
-                      console.error("Error getting computed styles:", computedStylesException);
+                      console.error(
+                        "Error getting computed styles:",
+                        computedStylesException
+                      );
                     } else if (Object.keys(computedStylesResult).length > 0) {
                       computedStyles = computedStylesResult;
                     }
@@ -1348,11 +1389,7 @@ async function setupWebSocket() {
                     for (let i = 0; i < str.length; i++) {
                       h ^= str.charCodeAt(i);
                       h +=
-                        (h << 1) +
-                        (h << 4) +
-                        (h << 7) +
-                        (h << 8) +
-                        (h << 24);
+                        (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
                     }
                     return (h >>> 0).toString(36);
                   };
@@ -1392,11 +1429,19 @@ async function setupWebSocket() {
                   });
                 } finally {
                   // Remove the temporary attribute
-                  const [, removeAttributeException] = await windowEval(function (uniqueId) {
-                    document.querySelector(`[data-${uniqueId}="1"]`).removeAttribute(`data-${uniqueId}`)
-                  }, element.uniqueId);
+                  const [, removeAttributeException] = await windowEval(
+                    function (uniqueId) {
+                      document
+                        .querySelector(`[data-${uniqueId}="1"]`)
+                        .removeAttribute(`data-${uniqueId}`);
+                    },
+                    element.uniqueId
+                  );
                   if (removeAttributeException) {
-                    console.warn("Error removing temporary attribute:", removeAttributeException);
+                    console.warn(
+                      "Error removing temporary attribute:",
+                      removeAttributeException
+                    );
                   }
                 }
               } catch (error) {
@@ -1416,7 +1461,9 @@ async function setupWebSocket() {
               // ruleStore,
             };
 
-            console.log(`Chrome Extension: Found ${finalResult.totalCount} elements, processed ${finalResult.processedCount}`);
+            console.log(
+              `Chrome Extension: Found ${finalResult.totalCount} elements, processed ${finalResult.processedCount}`
+            );
 
             // Send back the elements with styles data
             ws.send(
@@ -1427,7 +1474,10 @@ async function setupWebSocket() {
               })
             );
           } catch (error) {
-            console.error("Chrome Extension: Error in element inspection process:", error);
+            console.error(
+              "Chrome Extension: Error in element inspection process:",
+              error
+            );
             ws.send(
               JSON.stringify({
                 type: "inspect-elements-error",
